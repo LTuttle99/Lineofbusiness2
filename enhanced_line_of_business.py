@@ -7,6 +7,7 @@ from pyvis.network import Network
 import streamlit.components.v1 as components
 import numpy as np
 import datetime
+import networkx as nx # NEW: Import networkx
 
 # --- SET UP STREAMLIT PAGE CONFIGURATION ---
 st.set_page_config(
@@ -216,6 +217,56 @@ def load_and_process_data(file_buffer, file_type):
             carrier_data[carrier][key] = sorted(list(data_dict[key]))
 
     return df, carrier_data, all_brokers_to, all_brokers_through, all_broker_entities, all_relationship_owners, sorted(list(all_node_names)), date_column_exists, df_missing_data
+
+# --- Function to calculate relationship frequencies ---
+@st.cache_data
+def calculate_relationship_frequencies(df_filtered_date, relationship_types_filter):
+    """Calculates the frequency of each direct Carrier-Relationship_Entity pair."""
+    frequencies = []
+    
+    # Ensure relevant columns are treated as strings before splitting
+    df_temp = df_filtered_date.copy()
+    for col in ['Brokers to', 'Brokers through', 'broker entity of', 'relationship owner']:
+        if col in df_temp.columns:
+            df_temp[col] = df_temp[col].astype(str).fillna('')
+
+    for index, row in df_temp.iterrows():
+        carrier = str(row['Carrier']).strip()
+        if not carrier:
+            continue # Skip rows with empty carriers
+
+        if "Brokers to" in relationship_types_filter:
+            brokers_to_str = row['Brokers to']
+            if brokers_to_str:
+                for broker in [b.strip() for b in brokers_to_str.split(',') if b.strip()]:
+                    frequencies.append({'Carrier': carrier, 'Related Entity': broker, 'Relationship Type': 'Brokers to'})
+
+        if "Brokers through" in relationship_types_filter:
+            brokers_through_str = row['Brokers through']
+            if brokers_through_str:
+                for broker in [b.strip() for b in brokers_through_str.split(',') if b.strip()]:
+                    frequencies.append({'Carrier': carrier, 'Related Entity': broker, 'Relationship Type': 'Brokers through'})
+        
+        if "broker entity of" in relationship_types_filter:
+            entity_str = row['broker entity of']
+            if entity_str:
+                for entity in [e.strip() for e in entity_str.split(',') if e.strip()]:
+                    frequencies.append({'Carrier': carrier, 'Related Entity': entity, 'Relationship Type': 'broker entity of'})
+
+        if "relationship owner" in relationship_types_filter:
+            owner_str = row['relationship owner']
+            if owner_str:
+                for owner in [o.strip() for o in owner_str.split(',') if o.strip()]:
+                    frequencies.append({'Carrier': carrier, 'Related Entity': owner, 'Relationship Type': 'relationship owner'})
+    
+    if not frequencies:
+        return pd.DataFrame()
+
+    freq_df = pd.DataFrame(frequencies)
+    # Group by all three columns to get unique carrier-entity-type combinations and their counts
+    final_freq_df = freq_df.groupby(['Carrier', 'Related Entity', 'Relationship Type']).size().reset_index(name='Count')
+    return final_freq_df.sort_values(by='Count', ascending=False)
+
 
 # --- Main App Logic ---
 if uploaded_file is not None:
@@ -716,7 +767,90 @@ if uploaded_file is not None:
     else:
         st.info("No carrier data available to determine diversity with current filters and relationship type selections.")
 
-    # --- RELATIONSHIP PATH EXPLORER ---
+    # --- NEW: Relationship Frequency Analysis ---
+    st.markdown("### 📊 Top Relationship Frequencies (Filtered Data)")
+    relationship_frequencies_df = calculate_relationship_frequencies(current_filtered_df_by_date, selected_relationship_types)
+
+    if not relationship_frequencies_df.empty:
+        st.write("These are the most frequent direct relationships between a Carrier and a specific Entity/Owner based on the raw data rows, reflecting how often that specific connection appears:")
+        st.dataframe(relationship_frequencies_df.head(10).style.format({'Count': '{:.0f}'}))
+        st.download_button(
+            label="⬇️ Download Top Relationship Frequencies",
+            data=relationship_frequencies_df.to_csv(index=False).encode('utf-8'),
+            file_name="relationship_frequencies.csv",
+            mime="text/csv",
+            key="download_relationship_frequencies"
+        )
+    else:
+        st.info("No relationship frequency data to display with current filters.")
+
+
+    # --- NEW: Centrality Measures ---
+    st.markdown("### 🌐 Network Centrality Measures")
+    st.write("These metrics identify the most influential or central nodes (Carriers, Brokers, Owners) in the network based on their connections.")
+
+    # Build networkx graph for centrality calculations
+    G = nx.Graph()
+    if not filtered_carrier_data_for_viz:
+        st.info("No data available to calculate network centrality with current filters.")
+    else:
+        for carrier, info in filtered_carrier_data_for_viz.items():
+            G.add_node(carrier, type='carrier') # Add carrier node
+            
+            if "Brokers to" in selected_relationship_types:
+                for broker_to in info['Brokers to']:
+                    G.add_node(broker_to, type='broker_to')
+                    G.add_edge(carrier, broker_to, type='brokers_to')
+            if "Brokers through" in selected_relationship_types:
+                for broker_through in info['Brokers through']:
+                    G.add_node(broker_through, type='broker_through')
+                    G.add_edge(carrier, broker_through, type='brokers_through')
+            if "broker entity of" in selected_relationship_types:
+                for entity in info['broker entity of']:
+                    G.add_node(entity, type='entity')
+                    G.add_edge(carrier, entity, type='broker_entity_of')
+            if "relationship owner" in selected_relationship_types:
+                for owner in info['relationship owner']:
+                    G.add_node(owner, type='owner')
+                    G.add_edge(carrier, owner, type='relationship_owner')
+
+        if G.number_of_nodes() > 1: # Need at least 2 nodes for meaningful centrality
+            try:
+                col_c1, col_c2, col_c3 = st.columns(3)
+
+                # Degree Centrality
+                degree_centrality = nx.degree_centrality(G)
+                df_degree = pd.DataFrame(degree_centrality.items(), columns=['Node', 'Degree Centrality'])
+                df_degree = df_degree.sort_values(by='Degree Centrality', ascending=False).head(10)
+                with col_c1:
+                    st.markdown("**Top 10 by Degree Centrality (Most Connections):**")
+                    st.dataframe(df_degree, hide_index=True)
+
+                # Betweenness Centrality
+                betweenness_centrality = nx.betweenness_centrality(G)
+                df_betweenness = pd.DataFrame(betweenness_centrality.items(), columns=['Node', 'Betweenness Centrality'])
+                df_betweenness = df_betweenness.sort_values(by='Betweenness Centrality', ascending=False).head(10)
+                with col_c2:
+                    st.markdown("**Top 10 by Betweenness Centrality (Bridges):**")
+                    st.dataframe(df_betweenness, hide_index=True)
+
+                # Closeness Centrality
+                closeness_centrality = nx.closeness_centrality(G)
+                df_closeness = pd.DataFrame(closeness_centrality.items(), columns=['Node', 'Closeness Centrality'])
+                df_closeness = df_closeness.sort_values(by='Closeness Centrality', ascending=False).head(10)
+                with col_c3:
+                    st.markdown("**Top 10 by Closeness Centrality (Quickest Reach):**")
+                    st.dataframe(df_closeness, hide_index=True)
+
+                # Optional: Pass degree centrality for node sizing in pyvis
+                st.session_state.degree_centrality_for_pyvis = degree_centrality
+
+            except Exception as e:
+                st.error(f"Error calculating centrality measures: {e}")
+                st.info("Ensure your graph is connected for meaningful centrality results.")
+        else:
+            st.info("Not enough connected nodes to calculate meaningful centrality measures.")
+
     st.markdown("---")
     st.markdown("## 🧭 Relationship Path Explorer")
     st.write("Select any Carrier, Broker, Entity, or Owner to see their direct connections.")
@@ -1002,42 +1136,77 @@ if uploaded_file is not None:
         net.toggle_physics(True)
 
         added_nodes = set()
+        
+        # Get degree centrality from session state if calculated
+        degree_centrality_scores = st.session_state.get('degree_centrality_for_pyvis', {})
+        max_degree = max(degree_centrality_scores.values()) if degree_centrality_scores else 1
+        
+        # Scale factor for node size (adjust as needed for visual appeal)
+        # Base size + scaled centrality. Min size to ensure visibility of small nodes.
+        BASE_NODE_SIZE = 10
+        SCALE_FACTOR = 30 
+
 
         # Add nodes and edges based on filtered data
         for carrier, info in network_source_data.items():
+            carrier_degree = degree_centrality_scores.get(carrier, 0)
+            carrier_size = BASE_NODE_SIZE + (carrier_degree / max_degree) * SCALE_FACTOR if max_degree > 0 else BASE_NODE_SIZE
+
             if carrier not in added_nodes:
-                net.add_node(carrier, label=carrier, color=node_colors['carrier'], shape=node_shapes['carrier'], title=f"Carrier: {carrier}\nDescription: {info['description'] if info['description'] else 'N/A'}")
+                net.add_node(carrier, label=carrier, color=node_colors['carrier'], shape=node_shapes['carrier'], 
+                             title=f"Carrier: {carrier}\nDescription: {info['description'] if info['description'] else 'N/A'}\nDegree Centrality: {carrier_degree:.2f}",
+                             size=carrier_size)
                 added_nodes.add(carrier)
 
             # Add Brokers To with distinct properties, if type is selected
             if "Brokers to" in selected_relationship_types:
                 for broker_to in info['Brokers to']:
+                    broker_to_degree = degree_centrality_scores.get(broker_to, 0)
+                    broker_to_size = BASE_NODE_SIZE + (broker_to_degree / max_degree) * SCALE_FACTOR if max_degree > 0 else BASE_NODE_SIZE
+
                     if broker_to not in added_nodes:
-                        net.add_node(broker_to, label=broker_to, color=node_colors['broker_to'], shape=node_shapes['broker_to'], title=f"Broker (To): {broker_to}")
+                        net.add_node(broker_to, label=broker_to, color=node_colors['broker_to'], shape=node_shapes['broker_to'], 
+                                     title=f"Broker (To): {broker_to}\nDegree Centrality: {broker_to_degree:.2f}",
+                                     size=broker_to_size)
                         added_nodes.add(broker_to)
                     net.add_edge(carrier, broker_to, title="Brokers to", color="#007BFF") # Blue edge
 
             # Add Brokers Through with distinct properties, if type is selected
             if "Brokers through" in selected_relationship_types:
                 for broker_through in info['Brokers through']:
+                    broker_through_degree = degree_centrality_scores.get(broker_through, 0)
+                    broker_through_size = BASE_NODE_SIZE + (broker_through_degree / max_degree) * SCALE_FACTOR if max_degree > 0 else BASE_NODE_SIZE
+
                     if broker_through not in added_nodes:
-                        net.add_node(broker_through, label=broker_through, color=node_colors['broker_through'], shape=node_shapes['broker_through'], title=f"Broker (Through): {broker_through}")
+                        net.add_node(broker_through, label=broker_through, color=node_colors['broker_through'], shape=node_shapes['broker_through'], 
+                                     title=f"Broker (Through): {broker_through}\nDegree Centrality: {broker_through_degree:.2f}",
+                                     size=broker_through_size)
                         added_nodes.add(broker_through)
                     net.add_edge(carrier, broker_through, title="Brokers through", color="#28A745") # Green edge
 
             # Add Broker Entities, if type is selected
             if "broker entity of" in selected_relationship_types:
                 for entity in info['broker entity of']:
+                    entity_degree = degree_centrality_scores.get(entity, 0)
+                    entity_size = BASE_NODE_SIZE + (entity_degree / max_degree) * SCALE_FACTOR if max_degree > 0 else BASE_NODE_SIZE
+
                     if entity not in added_nodes:
-                        net.add_node(entity, label=entity, color=node_colors['entity'], shape=node_shapes['entity'], title=f"Broker Entity: {entity}")
+                        net.add_node(entity, label=entity, color=node_colors['entity'], shape=node_shapes['entity'], 
+                                     title=f"Broker Entity: {entity}\nDegree Centrality: {entity_degree:.2f}",
+                                     size=entity_size)
                         added_nodes.add(entity)
                     net.add_edge(carrier, entity, title="Broker entity of", color="#FFC107") # Yellow/Orange edge
 
             # Add Relationship Owners, if type is selected
             if "relationship owner" in selected_relationship_types:
                 for owner in info['relationship owner']:
+                    owner_degree = degree_centrality_scores.get(owner, 0)
+                    owner_size = BASE_NODE_SIZE + (owner_degree / max_degree) * SCALE_FACTOR if max_degree > 0 else BASE_NODE_SIZE
+
                     if owner not in added_nodes:
-                        net.add_node(owner, label=owner, color=node_colors['owner'], shape=node_shapes['owner'], title=f"Relationship Owner: {owner}")
+                        net.add_node(owner, label=owner, color=node_colors['owner'], shape=node_shapes['owner'], 
+                                     title=f"Relationship Owner: {owner}\nDegree Centrality: {owner_degree:.2f}",
+                                     size=owner_size)
                         added_nodes.add(owner)
                     net.add_edge(carrier, owner, title="Relationship owner", color="#DC3545") # Red edge
 
@@ -1053,8 +1222,8 @@ if uploaded_file is not None:
                 st.info("No nodes or edges to display in the network graph with the current filters and selections.")
         except Exception as e:
             st.error(f"Could not generate network graph: {e}. Ensure pyvis is installed and accessible.")
-            st.info("If running locally, try: `pip install pyvis`")
-            st.info("If on Streamlit Cloud, add `pyvis` to your `requirements.txt`.")
+            st.info("If running locally, try: `pip install pyvis networkx`")
+            st.info("If on Streamlit Cloud, add `pyvis` and `networkx` to your `requirements.txt`.")
 
     # --- Data Quality Checks ---
     st.markdown("---")
@@ -1135,7 +1304,7 @@ else:
             """
             Scroll down to see various visualizations:
             * **Bar Charts:** Show the top brokers and distribution of relationship owners based on your filtered data.
-            * **Interactive Network Visualization:** This powerful graph will display carriers and their connections as nodes and edges. Click and drag nodes to explore the network, and hover over them for more information!
+            * **Interactive Network Visualization:** This powerful graph will display carriers and their connections as nodes and edges. Click and drag nodes to explore the network, and hover over them for more information! Node sizes now reflect their **centrality** (how many direct connections they have), indicating their importance in the network.
             """
         )
 
