@@ -118,14 +118,12 @@ def load_and_process_data(file_buffer, file_type):
         st.stop()
 
     # Identify rows with missing *critical* data (e.g., Carrier name)
-    # Corrected line: use .str.strip()
     missing_data_rows_carrier = df[df['Carrier'].isna() | (df['Carrier'].astype(str).str.strip() == '')].copy()
     
     if not missing_data_rows_carrier.empty:
         st.warning("Found rows with missing or empty 'Carrier' names. These rows will be excluded from analysis.")
         # Filter out rows with missing carriers for main processing
         df = df.dropna(subset=['Carrier']).copy()
-        # Corrected line: use .str.strip()
         df = df[df['Carrier'].astype(str).str.strip() != ''].copy()
 
     # Data Quality Check: missing values in *any* expected column (for report)
@@ -309,17 +307,6 @@ if uploaded_file is not None:
                 (original_df['Parsed Date'] <= pd.to_datetime(st.session_state.date_range_end))
             ].copy()
             
-            # Re-process carrier data based on date-filtered DataFrame
-            # Convert the filtered DataFrame back to a BytesIO object for the cached function
-            filtered_file_buffer = io.BytesIO(current_filtered_df_by_date.to_csv(index=False).encode('utf-8'))
-            
-            # The load_and_process_data function expects the full initial file buffer and type.
-            # To apply date filtering *before* aggregation, we need a custom aggregation based on current_filtered_df_by_date
-            # or re-run the full process with the already filtered df.
-            # For simplicity and to use the cached function structure, we'll re-run with a "virtual" file.
-            # However, this might re-trigger the cache if the content changes, potentially slowing things.
-            # A more robust approach would be to build carrier_data based on original_df and then filter carrier_data directly.
-
             # Re-aggregating carrier_data based on the date-filtered DataFrame:
             carrier_data = {}
             all_brokers_to = set()
@@ -681,7 +668,6 @@ if uploaded_file is not None:
     st.markdown("## ✨ AI-Generated Insights")
 
     # Top Brokers (Re-using existing calculations from filtered data)
-    st.markdown("### Top Brokers:")
     brokers_to_counts_insight = pd.Series([b for carrier_info in filtered_carrier_data_for_viz.values() for b in carrier_info['Brokers to']])
     brokers_through_counts_insight = pd.Series([b for carrier_info in filtered_carrier_data_for_viz.values() for b in carrier_info['Brokers through']])
 
@@ -1106,7 +1092,59 @@ if uploaded_file is not None:
         st.json(carrier_data)
 
 
-# --- Initial Message when no file is uploaded ---
+# --- Initial Message/Guided Tour when no file is uploaded ---
 else:
     st.info("⬆️ Please upload your Carrier Relationships file (CSV or Excel) in the sidebar to begin analysis.")
     st.markdown("---")
+
+    st.header("🚀 Get Started: Your Guided Tour!")
+    st.write("Welcome to the Carrier Relationship Viewer! Follow these simple steps to analyze your data:")
+
+    with st.expander("Step 1: Upload Your Data File 📂", expanded=True):
+        st.markdown(
+            """
+            To begin, you need to provide your carrier relationship data.
+            1.  Look for the **"Upload Data File"** section in the **left sidebar**.
+            2.  Click on **"Choose your Carrier Relationships file"** and select your `.xlsx` (Excel) or `.csv` file.
+            3.  Ensure your file has at least these required columns: `Carrier`, `Brokers to`, `Brokers through`, `broker entity of`, and `relationship owner`.
+            4.  You can also include optional columns like `Description` and `Date` for richer analysis.
+            """
+        )
+        st.info("💡 **Tip:** If you don't have a file ready, download our **'Sample Data File'** from the sidebar to see how the data should be structured!")
+
+    with st.expander("Step 2: Explore Global Filters ⚙️"):
+        st.markdown(
+            """
+            Once your data is loaded, the **"Global Filters"** section will appear in the **left sidebar**.
+            * Use these filters (e.g., 'Brokers to', 'relationship owner', or 'Date Range') to narrow down the data shown in the main view.
+            * You can also filter by **'Relationship Type'** to decide which connections (e.g., only 'Brokers to' or 'relationship owner') are displayed in the charts and network graph.
+            """
+        )
+
+    with st.expander("Step 3: Select Carriers for Details 📈"):
+        st.markdown(
+            """
+            In the main content area, you'll see a **"Select Carrier(s) for Details"** section.
+            * Type in the search bar or use the multiselect dropdown to find specific carriers.
+            * Once selected, the app will display detailed information about their relationships, including descriptions and associated brokers/owners.
+            """
+        )
+
+    with st.expander("Step 4: Visualize Relationships 🕸️"):
+        st.markdown(
+            """
+            Scroll down to see various visualizations:
+            * **Bar Charts:** Show the top brokers and distribution of relationship owners based on your filtered data.
+            * **Interactive Network Visualization:** This powerful graph will display carriers and their connections as nodes and edges. Click and drag nodes to explore the network, and hover over them for more information!
+            """
+        )
+
+    with st.expander("Step 5: Check Data Quality ✅"):
+        st.markdown(
+            """
+            The **"Data Quality Checks"** section will highlight any rows in your original data that had missing values in critical columns. This helps you understand potential gaps in your dataset.
+            """
+        )
+
+    st.markdown("---")
+    st.info("You're all set! Start by uploading your file and let's explore your carrier relationships.")
