@@ -118,18 +118,21 @@ def load_and_process_data(file_buffer, file_type):
         st.stop()
 
     # Identify rows with missing *critical* data (e.g., Carrier name)
-    missing_data_rows = df[df['Carrier'].isna() | (df['Carrier'].astype(str).strip() == '')].copy()
-    if not missing_data_rows.empty:
+    # Corrected line: use .str.strip()
+    missing_data_rows_carrier = df[df['Carrier'].isna() | (df['Carrier'].astype(str).str.strip() == '')].copy()
+    
+    if not missing_data_rows_carrier.empty:
         st.warning("Found rows with missing or empty 'Carrier' names. These rows will be excluded from analysis.")
         # Filter out rows with missing carriers for main processing
         df = df.dropna(subset=['Carrier']).copy()
-        df = df[df['Carrier'].astype(str).strip() != ''].copy()
+        # Corrected line: use .str.strip()
+        df = df[df['Carrier'].astype(str).str.strip() != ''].copy()
 
     # Data Quality Check: missing values in *any* expected column (for report)
     # Exclude the 'Description' column from strict missing check if it's purely optional
     expected_cols_for_dq_check = required_columns + [col for col in optional_columns if col in df.columns and col != 'Description']
     
-    # Identify rows with any missing data in the expected columns
+    # Identify rows with any missing data in the expected columns that are not already removed by carrier check
     df_missing_data = df[df[expected_cols_for_dq_check].isna().any(axis=1)].copy()
 
 
@@ -280,48 +283,103 @@ if uploaded_file is not None:
     st.sidebar.button("🗑️ Clear All Filters", on_click=clear_filters)
 
     # Date Filtering
-    filtered_df_by_date = original_df.copy()
-    if date_column_exists:
-        min_date = original_df['Parsed Date'].min()
-        max_date = original_df['Parsed Date'].max()
+    # Create a deep copy to avoid modifying the cached original_df directly
+    current_filtered_df_by_date = original_df.copy()
 
-        if pd.notna(min_date) and pd.notna(max_date):
+    if date_column_exists:
+        min_date_val = original_df['Parsed Date'].min()
+        max_date_val = original_df['Parsed Date'].max()
+
+        # Check if min_date_val and max_date_val are valid NaT before proceeding
+        if pd.notna(min_date_val) and pd.notna(max_date_val):
             st.sidebar.markdown("### Date Range Filter")
             date_range = st.sidebar.slider(
                 "Select Date Range",
-                min_value=min_date.date(),
-                max_value=max_date.date(),
-                value=(st.session_state.date_range_start or min_date.date(), st.session_state.date_range_end or max_date.date()),
+                min_value=min_date_val.date(),
+                max_value=max_date_val.date(),
+                value=(st.session_state.date_range_start or min_date_val.date(), st.session_state.date_range_end or max_date_val.date()),
                 format="YYYY-MM-DD",
                 key="date_range_filter_val"
             )
             st.session_state.date_range_start = date_range[0]
             st.session_state.date_range_end = date_range[1]
 
-            filtered_df_by_date = original_df[
+            current_filtered_df_by_date = original_df[
                 (original_df['Parsed Date'] >= pd.to_datetime(st.session_state.date_range_start)) &
                 (original_df['Parsed Date'] <= pd.to_datetime(st.session_state.date_range_end))
             ].copy()
             
             # Re-process carrier data based on date-filtered DataFrame
-            _, carrier_data, _, _, _, _, _, _, _ = load_and_process_data(io.BytesIO(filtered_df_by_date.to_csv(index=False).encode('utf-8')), 'csv')
-            # Update the all_brokers_to, etc., based on this filtered data
+            # Convert the filtered DataFrame back to a BytesIO object for the cached function
+            filtered_file_buffer = io.BytesIO(current_filtered_df_by_date.to_csv(index=False).encode('utf-8'))
+            
+            # The load_and_process_data function expects the full initial file buffer and type.
+            # To apply date filtering *before* aggregation, we need a custom aggregation based on current_filtered_df_by_date
+            # or re-run the full process with the already filtered df.
+            # For simplicity and to use the cached function structure, we'll re-run with a "virtual" file.
+            # However, this might re-trigger the cache if the content changes, potentially slowing things.
+            # A more robust approach would be to build carrier_data based on original_df and then filter carrier_data directly.
+
+            # Re-aggregating carrier_data based on the date-filtered DataFrame:
+            carrier_data = {}
             all_brokers_to = set()
             all_brokers_through = set()
             all_broker_entities = set()
             all_relationship_owners = set()
             all_node_names = set()
-            for carrier, info in carrier_data.items():
+
+            for index, row in current_filtered_df_by_date.iterrows():
+                carrier = str(row['Carrier']).strip() if pd.notna(row['Carrier']) else ""
+                if not carrier: continue
+
+                if carrier not in carrier_data:
+                    carrier_data[carrier] = {
+                        'Brokers to': set(), 'Brokers through': set(),
+                        'broker entity of': set(), 'relationship owner': set(),
+                        'description': None, 'original_rows': []
+                    }
+                carrier_data[carrier]['original_rows'].append(index)
                 all_node_names.add(carrier)
-                for b in info['Brokers to']: all_brokers_to.add(b); all_node_names.add(b)
-                for b in info['Brokers through']: all_brokers_through.add(b); all_node_names.add(b)
-                for e in info['broker entity of']: all_broker_entities.add(e); all_node_names.add(e)
-                for r in info['relationship owner']: all_relationship_owners.add(r); all_node_names.add(r)
-            all_node_names = sorted(list(all_node_names))
+
+                description_val = str(row['Description']).strip() if 'Description' in current_filtered_df_by_date.columns and pd.notna(row['Description']) else ""
+                if description_val and carrier_data[carrier]['description'] is None:
+                    carrier_data[carrier]['description'] = description_val
+
+                brokers_to_val = str(row['Brokers to']).strip() if pd.notna(row['Brokers to']) else ""
+                if brokers_to_val:
+                    for broker in [b.strip() for b in brokers_to_val.split(',') if b.strip()]:
+                        carrier_data[carrier]['Brokers to'].add(broker)
+                        all_brokers_to.add(broker)
+                        all_node_names.add(broker)
+
+                brokers_through_val = str(row['Brokers through']).strip() if pd.notna(row['Brokers through']) else ""
+                if brokers_through_val:
+                    for broker in [b.strip() for b in brokers_through_val.split(',') if b.strip()]:
+                        carrier_data[carrier]['Brokers through'].add(broker)
+                        all_brokers_through.add(broker)
+                        all_node_names.add(broker)
+
+                broker_entity_val = str(row['broker entity of']).strip() if pd.notna(row['broker entity of']) else ""
+                if broker_entity_val:
+                    carrier_data[carrier]['broker entity of'].add(broker_entity_val)
+                    all_broker_entities.add(broker_entity_val)
+                    all_node_names.add(broker_entity_val)
+
+                relationship_owner_val = str(row['relationship owner']).strip() if pd.notna(row['relationship owner']) else ""
+                if relationship_owner_val:
+                    carrier_data[carrier]['relationship owner'].add(relationship_owner_val)
+                    all_relationship_owners.add(relationship_owner_val)
+                    all_node_names.add(relationship_owner_val)
+
+            for c, data_dict in carrier_data.items():
+                for key in ['Brokers to', 'Brokers through', 'broker entity of', 'relationship owner']:
+                    carrier_data[c][key] = sorted(list(data_dict[key]))
+            
+            all_node_names = sorted(list(all_node_names)) # Update all_node_names with date filtered nodes
 
         else:
-            st.sidebar.info("Date column found but no valid dates for filtering.")
-            carrier_data = original_carrier_data # Revert to original if no valid dates
+            st.sidebar.info("Date column found but no valid dates for filtering range selection.")
+            carrier_data = original_carrier_data # Revert to original if no valid dates in range
     else:
         carrier_data = original_carrier_data # Use original if no date column or parsing failed
 
@@ -411,6 +469,7 @@ if uploaded_file is not None:
         st.metric(label="Unique Relationship Owners (Filtered)", value=len(all_relationship_owners))
     st.markdown("---")
 
+
     # --- CARRIER SEARCH AND SELECTION ---
     st.header("Select Carrier(s) for Details")
     
@@ -499,7 +558,7 @@ if uploaded_file is not None:
                         for broker in sorted(list(combined_details['Brokers to'])):
                             st.markdown(f"- **{broker}**")
                     else:
-                        st.info("No 'Brokers to' found for selected carriers or filtered out.")
+                        st.info("No 'Brokers to' found for selected carriers.")
             
             if "Brokers through" in selected_relationship_types:
                 with col_combined2:
@@ -508,7 +567,7 @@ if uploaded_file is not None:
                         for broker in sorted(list(combined_details['Brokers through'])):
                             st.markdown(f"- **{broker}**")
                     else:
-                        st.info("No 'Brokers through' found for selected carriers or filtered out.")
+                        st.info("No 'Brokers through' found for selected carriers.")
             
             if "broker entity of" in selected_relationship_types:
                 with col_combined3:
@@ -517,7 +576,7 @@ if uploaded_file is not None:
                         for entity in sorted(list(combined_details['broker entity of'])):
                             st.markdown(f"- **{entity}**")
                     else:
-                        st.info("No 'broker entity of' found for selected carriers or filtered out.")
+                        st.info("No 'broker entity of' found for selected carriers.")
             
             if "relationship owner" in selected_relationship_types:
                 with col_combined4:
@@ -526,7 +585,7 @@ if uploaded_file is not None:
                         for owner in sorted(list(combined_details['relationship owner'])):
                             st.markdown(f"- **{owner}**")
                     else:
-                        st.info("No 'relationship owner' found for selected carriers or filtered out.")
+                        st.info("No 'relationship owner' found for selected carriers.")
             st.markdown("---")
 
         # --- Display Individual Carrier Details ---
@@ -600,10 +659,10 @@ if uploaded_file is not None:
             )
         
         # Download Filtered Raw Data
-        if not filtered_df_by_date.empty:
+        if not current_filtered_df_by_date.empty:
             st.download_button(
                 label="⬇️ Download Currently Filtered Raw Data (CSV)",
-                data=filtered_df_by_date.to_csv(index=False).encode('utf-8'),
+                data=current_filtered_df_by_date.to_csv(index=False).encode('utf-8'),
                 file_name="filtered_raw_data.csv",
                 mime="text/csv",
                 help="Download the underlying data after global filters (date, broker/owner) are applied.",
@@ -626,19 +685,23 @@ if uploaded_file is not None:
     brokers_to_counts_insight = pd.Series([b for carrier_info in filtered_carrier_data_for_viz.values() for b in carrier_info['Brokers to']])
     brokers_through_counts_insight = pd.Series([b for carrier_info in filtered_carrier_data_for_viz.values() for b in carrier_info['Brokers through']])
 
-    if not brokers_to_counts_insight.empty:
+    if not brokers_to_counts_insight.empty and "Brokers to" in selected_relationship_types:
         top_to = brokers_to_counts_insight.value_counts().nlargest(5)
         st.write("**Most Frequent 'Brokers To' (Top 5):**")
         for broker, count in top_to.items():
             st.markdown(f"- **{broker}** (Associated with {count} carriers)")
+    elif "Brokers to" not in selected_relationship_types:
+        st.info("Insights for 'Brokers to' are hidden due to Relationship Type Filter.")
     else:
         st.info("No 'Brokers to' data available for insights with current filters.")
 
-    if not brokers_through_counts_insight.empty:
+    if not brokers_through_counts_insight.empty and "Brokers through" in selected_relationship_types:
         top_through = brokers_through_counts_insight.value_counts().nlargest(5)
         st.write("**Most Frequent 'Brokers Through' (Top 5):**")
         for broker, count in top_through.items():
             st.markdown(f"- **{broker}** (Associated with {count} carriers)")
+    elif "Brokers through" not in selected_relationship_types:
+        st.info("Insights for 'Brokers through' are hidden due to Relationship Type Filter.")
     else:
         st.info("No 'Brokers through' data available for insights with current filters.")
 
@@ -646,11 +709,18 @@ if uploaded_file is not None:
     st.markdown("### Most Diverse Carriers:")
     diversity_scores = {}
     for carrier, info in filtered_carrier_data_for_viz.items():
-        score = len(info['Brokers to']) + \
-                len(info['Brokers through']) + \
-                len(info['broker entity of']) + \
-                len(info['relationship owner'])
-        diversity_scores[carrier] = score
+        score = 0
+        if "Brokers to" in selected_relationship_types:
+            score += len(info['Brokers to'])
+        if "Brokers through" in selected_relationship_types:
+            score += len(info['Brokers through'])
+        if "broker entity of" in selected_relationship_types:
+            score += len(info['broker entity of'])
+        if "relationship owner" in selected_relationship_types:
+            score += len(info['relationship owner'])
+        
+        if score > 0: # Only include carriers with some relationships
+            diversity_scores[carrier] = score
     
     if diversity_scores:
         sorted_diversity = sorted(diversity_scores.items(), key=lambda item: item[1], reverse=True)
@@ -658,17 +728,33 @@ if uploaded_file is not None:
         for carrier, score in sorted_diversity[:5]:
             st.markdown(f"- **{carrier}** (Total unique associations: {score})")
     else:
-        st.info("No carrier data available to determine diversity with current filters.")
+        st.info("No carrier data available to determine diversity with current filters and relationship type selections.")
 
     # --- RELATIONSHIP PATH EXPLORER ---
     st.markdown("---")
     st.markdown("## 🧭 Relationship Path Explorer")
     st.write("Select any Carrier, Broker, Entity, or Owner to see their direct connections.")
 
+    # Filter all_node_names based on currently visible nodes in filtered_carrier_data_for_viz
+    # This ensures only relevant nodes appear in the explorer
+    visible_nodes_for_explorer = set()
+    for carrier, info in filtered_carrier_data_for_viz.items():
+        visible_nodes_for_explorer.add(carrier)
+        if "Brokers to" in selected_relationship_types:
+            visible_nodes_for_explorer.update(info['Brokers to'])
+        if "Brokers through" in selected_relationship_types:
+            visible_nodes_for_explorer.update(info['Brokers through'])
+        if "broker entity of" in selected_relationship_types:
+            visible_nodes_for_explorer.update(info['broker entity of'])
+        if "relationship owner" in selected_relationship_types:
+            visible_nodes_for_explorer.update(info['relationship owner'])
+    
+    sorted_visible_nodes = sorted(list(visible_nodes_for_explorer))
+
     selected_node_for_exploration = st.selectbox(
         "Select a Node to Explore:",
-        options=[""] + all_node_names, # Add empty option
-        index=0 if st.session_state.node_explorer_selection_val is None else (all_node_names.index(st.session_state.node_explorer_selection_val) + 1 if st.session_state.node_explorer_selection_val in all_node_names else 0),
+        options=[""] + sorted_visible_nodes, # Add empty option
+        index=0 if st.session_state.node_explorer_selection_val is None or st.session_state.node_explorer_selection_val not in sorted_visible_nodes else (sorted_visible_nodes.index(st.session_state.node_explorer_selection_val) + 1),
         key="node_explorer_selection_val"
     )
 
@@ -676,49 +762,139 @@ if uploaded_file is not None:
         st.markdown(f"### Direct Connections for **{selected_node_for_exploration}**:")
         found_connections = False
 
-        # Search in carrier_data (if it's a carrier)
-        if selected_node_for_exploration in carrier_data:
-            info = carrier_data[selected_node_for_exploration]
-            st.markdown(f"**This is a Carrier.** Description: {info['description'] if info['description'] else 'N/A'}")
-            st.markdown("---")
-            if info['Brokers to']:
-                st.write("**Brokers To:**", ", ".join(info['Brokers to']))
-                found_connections = True
-            if info['Brokers through']:
-                st.write("**Brokers Through:**", ", ".join(info['Brokers through']))
-                found_connections = True
-            if info['broker entity of']:
-                st.write("**Broker Entity Of:**", ", ".join(info['broker entity of']))
-                found_connections = True
-            if info['relationship owner']:
-                st.write("**Relationship Owner:**", ", ".join(info['relationship owner']))
-                found_connections = True
+        # Check if the selected node is a carrier
+        if selected_node_for_exploration in carrier_data: # Use original carrier_data to find base info, then filter
+            info = carrier_data[selected_node_for_exploration] # Get full info first
+            
+            # Check if this carrier is *visible* in the filtered data
+            if selected_node_for_exploration in filtered_carrier_data_for_viz:
+                st.markdown(f"**This is a Carrier.** Description: {info['description'] if info['description'] else 'N/A'}")
+                st.markdown("---")
+                
+                if "Brokers to" in selected_relationship_types and info['Brokers to']:
+                    st.write("**Brokers To:**", ", ".join(info['Brokers to']))
+                    found_connections = True
+                if "Brokers through" in selected_relationship_types and info['Brokers through']:
+                    st.write("**Brokers Through:**", ", ".join(info['Brokers through']))
+                    found_connections = True
+                if "broker entity of" in selected_relationship_types and info['broker entity of']:
+                    st.write("**Broker Entity Of:**", ", ".join(info['broker entity of']))
+                    found_connections = True
+                if "relationship owner" in selected_relationship_types and info['relationship owner']:
+                    st.write("**Relationship Owner:**", ", ".join(info['relationship owner']))
+                    found_connections = True
+            else:
+                st.info(f"Carrier '{selected_node_for_exploration}' is not active with current global filters (date, broker/owner filters).")
         
         # Search for connections where selected_node_for_exploration is a broker, entity, or owner
-        # Iterate through all carriers to find connections TO the selected node
+        # Iterate through *filtered* carrier data to find connections TO the selected node
         connected_to_carrier = set()
-        for carrier, info in carrier_data.items():
-            if selected_node_for_exploration in info['Brokers to']:
+        for carrier, info in filtered_carrier_data_for_viz.items(): # Use filtered_carrier_data_for_viz here
+            if "Brokers to" in selected_relationship_types and selected_node_for_exploration in info['Brokers to']:
                 connected_to_carrier.add(f"Carrier: {carrier} (as 'Brokers to')")
-            if selected_node_for_exploration in info['Brokers through']:
+            if "Brokers through" in selected_relationship_types and selected_node_for_exploration in info['Brokers through']:
                 connected_to_carrier.add(f"Carrier: {carrier} (as 'Brokers through')")
-            if selected_node_for_exploration in info['broker entity of']:
+            if "broker entity of" in selected_relationship_types and selected_node_for_exploration in info['broker entity of']:
                 connected_to_carrier.add(f"Carrier: {carrier} (as 'broker entity of')")
-            if selected_node_for_exploration in info['relationship owner']:
+            if "relationship owner" in selected_relationship_types and selected_node_for_exploration in info['relationship owner']:
                 connected_to_carrier.add(f"Carrier: {carrier} (as 'relationship owner')")
 
         if connected_to_carrier:
             st.markdown("---")
-            st.write(f"**Connected To (Carriers that use/are associated with {selected_node_for_exploration}):**")
+            st.write(f"**Connected To (Carriers that use/are associated with {selected_node_for_exploration}, based on current filters):**")
             for conn in sorted(list(connected_to_carrier)):
                 st.markdown(f"- {conn}")
             found_connections = True
         
         if not found_connections:
-            st.info(f"No direct connections found for **{selected_node_for_exploration}** in the current filtered data.")
+            st.info(f"No direct connections found for **{selected_node_for_exploration}** in the current filtered data and selected relationship types.")
 
 
     # --- VISUALIZATIONS (NOW FILTERED) ---
+    st.markdown("---")
+    st.markdown("## 📊 Relationship Visualizations (Filtered Data)")
+
+    # Bar chart for Top Brokers To
+    brokers_to_counts = pd.Series([b for carrier_info in filtered_carrier_data_for_viz.values() for b in carrier_info['Brokers to']])
+    if not brokers_to_counts.empty and "Brokers to" in selected_relationship_types:
+        top_brokers_to = brokers_to_counts.value_counts().reset_index()
+        top_brokers_to.columns = ['Broker', 'Count']
+        fig_brokers_to = px.bar(
+            top_brokers_to.head(10),
+            x='Broker',
+            y='Count',
+            title='Top 10 "Brokers To" by Carrier Associations (Filtered)',
+            labels={'Broker': 'Broker (To)', 'Count': 'Number of Carriers'},
+            height=400
+        )
+        st.plotly_chart(fig_brokers_to, use_container_width=True)
+        img_bytes_brokers_to = pio.to_image(fig_brokers_to, format='png')
+        st.download_button(
+            label="🖼️ Download 'Brokers To' Chart",
+            data=img_bytes_brokers_to,
+            file_name="brokers_to_chart.png",
+            mime="image/png",
+            key="download_brokers_to_chart"
+        )
+    elif "Brokers to" not in selected_relationship_types:
+        st.info("'Brokers to' chart is hidden due to Relationship Type Filter.")
+    else:
+        st.info("No 'Brokers to' data available for visualization with current filters.")
+
+    # Bar chart for Top Brokers Through
+    brokers_through_counts = pd.Series([b for carrier_info in filtered_carrier_data_for_viz.values() for b in carrier_info['Brokers through']])
+    if not brokers_through_counts.empty and "Brokers through" in selected_relationship_types:
+        top_brokers_through = brokers_through_counts.value_counts().reset_index()
+        top_brokers_through.columns = ['Broker', 'Count']
+        fig_brokers_through = px.bar(
+            top_brokers_through.head(10),
+            x='Broker',
+            y='Count',
+            title='Top 10 "Brokers Through" by Carrier Associations (Filtered)',
+            labels={'Broker': 'Broker (Through)', 'Count': 'Number of Carriers'},
+            height=400
+        )
+        st.plotly_chart(fig_brokers_through, use_container_width=True)
+        img_bytes_brokers_through = pio.to_image(fig_brokers_through, format='png')
+        st.download_button(
+            label="🖼️ Download 'Brokers Through' Chart",
+            data=img_bytes_brokers_through,
+            file_name="brokers_through_chart.png",
+            mime="image/png",
+            key="download_brokers_through_chart"
+        )
+    elif "Brokers through" not in selected_relationship_types:
+        st.info("'Brokers through' chart is hidden due to Relationship Type Filter.")
+    else:
+        st.info("No 'Brokers through' data available for visualization with current filters.")
+
+    # Bar chart for Relationship Owners Distribution
+    relationship_owners_counts = pd.Series([o for carrier_info in filtered_carrier_data_for_viz.values() for o in carrier_info['relationship owner']])
+    if not relationship_owners_counts.empty and "relationship owner" in selected_relationship_types:
+        owner_distribution = relationship_owners_counts.value_counts().reset_index()
+        owner_distribution.columns = ['Owner', 'Count']
+        fig_owners = px.bar(
+            owner_distribution,
+            x='Owner',
+            y='Count',
+            title='Distribution of Relationship Owners (Filtered)',
+            labels={'Owner': 'Relationship Owner', 'Count': 'Number of Carriers'},
+            height=400
+        )
+        st.plotly_chart(fig_owners, use_container_width=True)
+        img_bytes_owners = pio.to_image(fig_owners, format='png')
+        st.download_button(
+            label="🖼️ Download 'Relationship Owners' Chart",
+            data=img_bytes_owners,
+            file_name="relationship_owners_chart.png",
+            mime="image/png",
+            key="download_owners_chart"
+        )
+    elif "relationship owner" not in selected_relationship_types:
+        st.info("'Relationship Owners' chart is hidden due to Relationship Type Filter.")
+    else:
+        st.info("No 'Relationship Owner' data available for visualization with current filters.")
+
     st.markdown("---")
     st.markdown("## 🕸️ Interactive Network Visualization")
 
@@ -898,7 +1074,7 @@ if uploaded_file is not None:
     st.markdown("---")
     st.markdown("## ✅ Data Quality Checks")
     if not df_missing_data.empty:
-        st.warning(f"Found **{len(df_missing_data)}** rows with missing data in required columns (Carrier, Brokers to, Brokers through, broker entity of, relationship owner).")
+        st.warning(f"Found **{len(df_missing_data)}** rows with missing data in required columns (excluding Carrier, which is handled earlier).")
         st.dataframe(df_missing_data)
         
         csv_missing_data = df_missing_data.to_csv(index=False).encode('utf-8')
