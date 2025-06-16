@@ -8,3 +8,5 @@ fpdf
 streamlit-extras
 networkx
 streamlit-tags
+scikit-learn
+streamlit-authenticator
