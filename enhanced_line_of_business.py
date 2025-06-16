@@ -454,7 +454,8 @@ if uploaded_file is not None:
     if st.session_state.get('clear_filters_flag', False):
         for key in ['filter_brokers_to_val', 'filter_brokers_through_val', 'filter_broker_entity_val',
                     'filter_relationship_owner_val', 'carrier_search_tags_val', 'carrier_multiselect_val',
-                    'relationship_type_filter_val', 'date_range_start', 'date_range_end', 'node_explorer_selection_val']:
+                    'relationship_type_filter_val', 'date_range_start', 'date_range_end', 'node_explorer_selection_val',
+                    'last_search_query_input']: # Add this to clear the problematic session state key
             if key in st.session_state:
                 del st.session_state[key]
         st.session_state.clear_filters_flag = False
@@ -471,6 +472,9 @@ if uploaded_file is not None:
     if "date_range_start" not in st.session_state: st.session_state.date_range_start = None
     if "date_range_end" not in st.session_state: st.session_state.date_range_end = None
     if "node_explorer_selection_val" not in st.session_state: st.session_state.node_explorer_selection_val = None
+    # Initialize 'last_search_query_input' to an empty list to avoid index error on first access
+    if "last_search_query_input" not in st.session_state: st.session_state.last_search_query_input = []
+
 
     # --- GLOBAL FILTERS ---
     st.sidebar.header("⚙️ Global Filters", help="Use these to narrow down the data displayed across all sections.")
@@ -487,6 +491,7 @@ if uploaded_file is not None:
         st.session_state.date_range_start = None
         st.session_state.date_range_end = None
         st.session_state.node_explorer_selection_val = None
+        st.session_state.last_search_query_input = [] # Ensure this is cleared too
         st.rerun() # Force a rerun to apply cleared filters immediately
 
     st.sidebar.button("🗑️ Clear All Filters", on_click=clear_filters)
@@ -704,7 +709,12 @@ if uploaded_file is not None:
 
     with tabs[1]:
         st.header("Select Carrier(s) for Details")
-        # Ensure search_query doesn't break if st_tags returns empty list (first run)
+        
+        # Initialize last_search_query_input if not present (should be done by clear_filters_flag logic, but good for robustness)
+        if 'last_search_query_input' not in st.session_state:
+            st.session_state.last_search_query_input = []
+
+        # Ensure search_query_input doesn't break if st_tags returns empty list (first run or cleared)
         current_search_tags = st.session_state.carrier_search_tags_val
         search_query_default = current_search_tags[0] if current_search_tags else ""
 
@@ -715,8 +725,20 @@ if uploaded_file is not None:
             value=[search_query_default], # Pass initial value
             key="carrier_search_tags_val"
         )
-        # st_tags returns a list, take the first element if it exists
-        search_query = search_query_input[0] if search_query_input else ""
+        
+        # Determine current search query value, safely handling empty list
+        current_search_query_val = search_query_input[0] if search_query_input else ""
+        last_search_query_stored = st.session_state.last_search_query_input[0] if st.session_state.last_search_query_input else ""
+
+        # Determine default for multiselect based on search_query_input and current multiselect
+        # If search query changed, clear previous multiselect to avoid confusion
+        if current_search_query_val != last_search_query_stored:
+            default_multiselect = []
+        else:
+            default_multiselect = st.session_state.carrier_multiselect_val
+
+        # Update search_query for filtering
+        search_query = current_search_query_val
         
         search_filtered_carriers = [
             carrier for carrier in filtered_unique_carriers_for_selection
@@ -728,20 +750,14 @@ if uploaded_file is not None:
             if not search_filtered_carriers:
                 st.warning("Adjust filters or search query to find more carriers.")
         
-        # Determine default for multiselect based on search_query_input and current multiselect
-        # If search query changed, clear previous multiselect to avoid confusion
-        if search_query_input and search_query_input[0] != (st.session_state.get('last_search_query_input', [""])[0]):
-            default_multiselect = []
-        else:
-            default_multiselect = st.session_state.carrier_multiselect_val
-
         selected_carriers = st.multiselect(
             "✨ Choose one or more Carriers:",
             options=search_filtered_carriers,
             default=default_multiselect,
             key="carrier_multiselect_val"
         )
-        st.session_state.last_search_query_input = search_query_input # Store for next rerun comparison
+        # Store the current search query input for the next rerun's comparison
+        st.session_state.last_search_query_input = search_query_input # Store the list directly
 
         st.markdown("---")
 
@@ -826,7 +842,6 @@ if uploaded_file is not None:
                     info = carrier_data[carrier] 
                     st.markdown(f"**📝 Description:** {info.get('description', 'N/A')}")
                     
-                    # Display individual relationships only if type is selected
                     col_ind1, col_ind2 = st.columns(2)
                     col_ind3, col_ind4 = st.columns(2)
                     
