@@ -5,3 +5,6 @@ plotly
 kaleido
 pyvis
 fpdf
+streamlit-extras
+networkx
+streamlit-tags
