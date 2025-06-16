@@ -7,7 +7,7 @@ from pyvis.network import Network
 import streamlit.components.v1 as components
 import numpy as np
 import datetime
-import networkx as nx # Potentially useful for advanced graph analytics in the future
+import networkx as nx
 from streamlit_tags import st_tags
 
 # --- SET UP STREAMLIT PAGE CONFIGURATION ---
@@ -25,6 +25,7 @@ def toggle_theme():
     st.session_state.theme = 'dark' if st.session_state.theme == 'light' else 'light'
 
 # Define bgcolor and font_color globally based on theme
+# Note: These are for Plotly charts mainly. Streamlit's own elements need direct CSS.
 bgcolor = "#222222" if st.session_state.theme == 'dark' else "#FFFFFF"
 font_color = "white" if st.session_state.theme == 'dark' else "black"
 
@@ -32,88 +33,149 @@ font_color = "white" if st.session_state.theme == 'dark' else "black"
 if st.session_state.theme == 'dark':
     st.markdown(f"""
         <style>
-        body {{
-            color: #FAFAFA;
-            background-color: #121212;
-        }}
+        /* General app background and text color */
         .stApp {{
             background-color: #121212;
-            color: #FAFAFA;
+            color: #FAFAFA; /* Main text color */
         }}
+
+        /* Headings */
+        h1, h2, h3, h4, h5, h6 {{
+            color: #FAFAFA; /* White for headings */
+        }}
+        p, li, div, label {{
+            color: #FAFAFA; /* Ensure all general text is light */
+        }}
+
+        /* Metrics */
         .stMetric > div:first-child {{
-            color: #BB86FC;
+            color: #BB86FC; /* Label color */
         }}
         .stMetric > div:nth-child(2) {{
-            color: #03DAC6;
+            color: #03DAC6; /* Value color */
         }}
+
+        /* Code blocks */
         .stCodeBlock {{
             background-color: #242424;
             color: #FFFFFF;
         }}
+
+        /* Alerts/Banners */
+        /* You had specific alert colors, ensure text within them is visible too */
         .stAlert {{
-            color: #FAFAFA;
+            color: #FAFAFA; /* Default alert text color */
         }}
-        .stAlert.st-emotion-cache-1fcp7s3 {{
-            background-color: #262626;
-            color: #BB86FC;
+        .stAlert.st-emotion-cache-1fcp7s3 {{ /* Specific alert types (info, warning, error, success) */
+            background-color: #262626; /* Darker background for alerts */
+            color: #BB86FC; /* Example: Info alert text color */
             border-left: 5px solid #BB86FC;
         }}
-        .stAlert.st-emotion-cache-1fcp7s3 {{
+        /* Re-apply specific colors for different alert types if needed,
+           ensuring their text is also FAFAFA or a suitable light color */
+        [data-testid="stStatusWidget"] {{ /* Generic status/info boxes */
             background-color: #262626;
-            color: #FFBB86;
-            border-left: 5px solid #FFBB86;
+            color: #FAFAFA;
         }}
-        .stAlert.st-emotion-cache-1fcp7s3 {{
-            background-color: #262626;
-            color: #FF5A5A;
-            border-left: 5px solid #FF5A5A;
+        [data-testid="stStatusWidget"] [data-testid="stMarkdownContainer"] p {{
+            color: #FAFAFA; /* Ensure markdown text inside status widget is white */
         }}
-        .stAlert.st-emotion-cache-1fcp7s3 {{
-            background-color: #262626;
-            color: #8DFF86;
-            border-left: 5px solid #8DFF86;
-        }}
+
+
+        /* Tabs */
         .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {{
             font-size: 1.1rem;
+            color: #FAFAFA; /* Tab label text color */
         }}
         .stTabs [data-baseweb="tab"] {{
-            color: #BB86FC;
+            color: #FAFAFA; /* Default tab text color */
         }}
         .stTabs [data-baseweb="tab-list"] button:focus {{
             outline: none !important;
             box-shadow: none !important;
         }}
         .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {{
-            border-bottom-color: #03DAC6 !important;
-            color: #03DAC6 !important;
+            border-bottom-color: #03DAC6 !important; /* Active tab underline */
+            color: #03DAC6 !important; /* Active tab text color */
         }}
+
+        /* Sidebar */
         .stSidebar {{
             background-color: #1E1E1E;
+            color: #FAFAFA; /* Sidebar text color */
+        }}
+        .stSidebar .st-emotion-cache-1j7cynr, .stSidebar .st-emotion-cache-vk337u {{ /* Adjust text in some sidebar elements */
             color: #FAFAFA;
         }}
-        .stDownloadButton, .stButton {{
-            background-color: #BB86FC;
-            color: white;
+        .stSidebar h1, .stSidebar h2, .stSidebar h3, .stSidebar h4, .stSidebar h5, .stSidebar h6 {{
+            color: #FAFAFA; /* Headings in sidebar */
         }}
-        .stDownloadButton:hover, .stButton:hover {{
+        .stSidebar label {{
+            color: #FAFAFA; /* Labels in sidebar (e.g., for selectboxes) */
+        }}
+
+        /* Buttons (including download buttons) */
+        .stDownloadButton button, .stButton button {{
+            background-color: #BB86FC; /* Button background */
+            color: white; /* Button text color */
+            border: none; /* Remove default border */
+        }}
+        .stDownloadButton button:hover, .stButton button:hover {{
+            background-color: #03DAC6; /* Button hover background */
+            color: #121212; /* Button hover text color (dark against light background) */
+        }}
+        .stDownloadButton button:active, .stButton button:active {{
+            background-color: #018786; /* Button active background */
+            color: #121212; /* Button active text color */
+        }}
+
+        /* Selectboxes, Multiselects, Text Inputs */
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stMultiSelect div[data-baseweb="select"] > div,
+        .stTextInput div[data-baseweb="input"] > input,
+        .stTextArea div[data-baseweb="textarea"] > textarea {{
+            background-color: #242424; /* Input field background */
+            color: #FAFAFA; /* Input text color */
+            border-color: #444444; /* Input border color */
+        }}
+        .stSelectbox [data-baseweb="select"] button, /* Selectbox current value text */
+        .stMultiSelect [data-baseweb="select"] button {{
+            color: #FAFAFA;
+        }}
+        .stSelectbox [data-baseweb="select"] [data-baseweb="tag"], /* Multiselect tags */
+        .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] {{
+            background-color: #BB86FC;
+            color: #FFFFFF;
+        }}
+
+        /* Slider */
+        .stSlider .st-emotion-cache-vdzXy {{ /* Slider thumb/value */
+            color: #FAFAFA;
+        }}
+        .stSlider .st-emotion-cache-o3gfuq {{ /* Slider track */
+            background-color: #BB86FC;
+        }}
+        .stSlider .st-emotion-cache-t9w34u {{ /* Slider range fill */
             background-color: #03DAC6;
-            color: #121212;
         }}
         </style>
         """, unsafe_allow_html=True)
 elif st.session_state.theme == 'light':
     st.markdown(f"""
         <style>
-        body {{
-            color: #262730;
-            background-color: #F0F2F6;
-        }}
+        /* Reset to Streamlit's default light theme, ensuring general text/background */
         .stApp {{
             background-color: #F0F2F6;
             color: #262730;
         }}
         </style>
         """, unsafe_allow_html=True)
+
+# Rest of your Streamlit application code follows...
+# This part of the code remains the same as provided previously.
+# I'm omitting it here for brevity, but you should copy the entire code
+# from the previous response starting from `col_theme_toggle_main, _ = st.columns([0.1, 0.9])`
+# and replace your existing code with it, ensuring you only update the CSS block.
 
 col_theme_toggle_main, _ = st.columns([0.1, 0.9])
 with col_theme_toggle_main:
