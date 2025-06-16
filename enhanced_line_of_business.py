@@ -28,92 +28,96 @@ def toggle_theme():
     st.session_state.theme = 'dark' if st.session_state.theme == 'light' else 'light'
     # st.rerun() # No need to rerun if we use custom CSS for immediate effect
 
+# Define bgcolor and font_color globally based on theme
+bgcolor = "#222222" if st.session_state.theme == 'dark' else "#FFFFFF"
+font_color = "white" if st.session_state.theme == 'dark' else "black"
+
 # Apply custom CSS for dark theme
 if st.session_state.theme == 'dark':
-    st.markdown("""
+    st.markdown(f"""
         <style>
-        body {
+        body {{
             color: #FAFAFA; /* Light gray text for dark background */
             background-color: #121212; /* Dark background */
-        }
-        .stApp {
+        }}
+        .stApp {{
             background-color: #121212;
             color: #FAFAFA;
-        }
-        .stMetric > div:first-child { /* Metric label */
+        }}
+        .stMetric > div:first-child {{ /* Metric label */
             color: #BB86FC; /* Purple for labels */
-        }
-        .stMetric > div:nth-child(2) { /* Metric value */
+        }}
+        .stMetric > div:nth-child(2) {{ /* Metric value */
             color: #03DAC6; /* Teal for values */
-        }
-        .stCodeBlock {
+        }}
+        .stCodeBlock {{
             background-color: #242424; /* Darker code block */
             color: #FFFFFF;
-        }
-        .stAlert {
+        }}
+        .stAlert {{
             color: #FAFAFA;
-        }
-        .stAlert.st-emotion-cache-1fcp7s3 { /* For st.info */
+        }}
+        .stAlert.st-emotion-cache-1fcp7s3 {{ /* For st.info */
             background-color: #262626;
             color: #BB86FC;
             border-left: 5px solid #BB86FC;
-        }
-        .stAlert.st-emotion-cache-1fcp7s3 { /* For st.warning */
+        }}
+        .stAlert.st-emotion-cache-1fcp7s3 {{ /* For st.warning */
             background-color: #262626;
             color: #FFBB86;
             border-left: 5px solid #FFBB86;
-        }
-        .stAlert.st-emotion-cache-1fcp7s3 { /* For st.error */
+        }}
+        .stAlert.st-emotion-cache-1fcp7s3 {{ /* For st.error */
             background-color: #262626;
             color: #FF5A5A;
             border-left: 5px solid #FF5A5A;
-        }
-        .stAlert.st-emotion-cache-1fcp7s3 { /* For st.success */
+        }}
+        .stAlert.st-emotion-cache-1fcp7s3 {{ /* For st.success */
             background-color: #262626;
             color: #8DFF86;
             border-left: 5px solid #8DFF86;
-        }
-        .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+        }}
+        .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {{
             font-size: 1.1rem; /* Adjust tab label font size */
-        }
-        .stTabs [data-baseweb="tab"] {
+        }}
+        .stTabs [data-baseweb="tab"] {{
             color: #BB86FC; /* Tab text color */
-        }
-        .stTabs [data-baseweb="tab-list"] button:focus {
+        }}
+        .stTabs [data-baseweb="tab-list"] button:focus {{
             outline: none !important;
             box-shadow: none !important;
-        }
-        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+        }}
+        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {{
             border-bottom-color: #03DAC6 !important; /* Selected tab indicator */
             color: #03DAC6 !important; /* Selected tab text color */
-        }
+        }}
         /* Sidebar styling for dark theme */
-        .stSidebar {
+        .stSidebar {{
             background-color: #1E1E1E; /* Darker sidebar */
             color: #FAFAFA;
-        }
-        .stDownloadButton, .stButton {
+        }}
+        .stDownloadButton, .stButton {{
             background-color: #BB86FC;
             color: white;
-        }
-        .stDownloadButton:hover, .stButton:hover {
+        }}
+        .stDownloadButton:hover, .stButton:hover {{
             background-color: #03DAC6;
             color: #121212;
-        }
+        }}
         /* Custom styles for pyvis network nodes - these are applied within the network_graph function */
         </style>
         """, unsafe_allow_html=True)
 elif st.session_state.theme == 'light':
-    st.markdown("""
+    st.markdown(f"""
         <style>
-        body {
+        body {{
             color: #262730; /* Dark text for light background */
             background-color: #F0F2F6; /* Light background */
-        }
-        .stApp {
+        }}
+        .stApp {{
             background-color: #F0F2F6;
             color: #262730;
-        }
+        }}
         /* Reset other specific styles if needed for light theme */
         /* You might want to define some specific light theme colors here too for consistency */
         </style>
@@ -362,8 +366,8 @@ def calculate_relationship_frequencies(df_filtered_date, relationship_types_filt
 @st.cache_data(show_spinner="Generating network graph...")
 def create_network_graph(filtered_carrier_data_for_viz, selected_carriers, selected_relationship_types, current_theme):
     # Pyvis background color adjusts to theme
-    bgcolor = "#222222" if current_theme == 'dark' else "#FFFFFF"
-    font_color = "white" if current_theme == 'dark' else "black"
+    # bgcolor = "#222222" if current_theme == 'dark' else "#FFFFFF" # NO LONGER NEEDED HERE
+    # font_color = "white" if current_theme == 'dark' else "black" # NO LONGER NEEDED HERE
 
     net = Network(notebook=True, height="600px", width="100%", directed=True, bgcolor=bgcolor, font_color=font_color, cdn_resources='remote')
     net.toggle_physics(True)
@@ -945,9 +949,9 @@ if uploaded_file is not None:
                     }
                 )
                 fig.update_layout(yaxis={'categoryorder': 'total ascending'},
-                                  plot_bgcolor=bgcolor, # Match plot background to app theme
-                                  paper_bgcolor=bgcolor, # Match paper background to app theme
-                                  font_color=font_color, # Match font color to app theme
+                                  plot_bgcolor=bgcolor, # Now bgcolor is globally defined
+                                  paper_bgcolor=bgcolor, # Now bgcolor is globally defined
+                                  font_color=font_color, # Now font_color is globally defined
                                   hoverlabel_bgcolor=font_color, # Invert hoverlabel background for contrast
                                   hoverlabel_font_color=bgcolor
                                   )
